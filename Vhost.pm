@@ -4,8 +4,9 @@ use 5.006;
 use strict;
 use warnings;
 use DBI;
-use vars qw($sth $dbh $sname $sadmin $droot $id $extensions @sextensions
-	    $soptions $i $htaccess $sdomain $servername $users %SQL);
+use vars qw($sth $dbh $sname $sadmin $droot $id $extensions @sextensions $redirect
+	    $soptions $i $htaccess $sdomain $servername $users %SQL $hoster $eredirect
+	    $safe_mode $open_basedir $magic_quotes);
 
 require Exporter;
 
@@ -27,22 +28,40 @@ our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 our @EXPORT = qw(
 LoadVhosts	
 );
-our $VERSION = '0.01';
+our $VERSION = '0.03';
 
 
 # SQL Setup
 $SQL{'user'} = "foo";
 $SQL{'pass'} = "bar";
+$SQL{'hostname'} = "localhost";
+$SQL{'whoami'} = "192.168.1.1";
+
 # Preloaded methods go here.
 sub LoadVhosts($) {
     my $VirtualHost = shift;
     $i = 0;
-    $dbh = DBI->connect("DBI:mysql:mail",$SQL{'user'},$SQL{'pass'});
-    $sth = $dbh->prepare("SELECT * FROM vhosts");
+    $dbh = DBI->connect("DBI:mysql:mail:".$SQL{'hostname'},$SQL{'user'},$SQL{'pass'});
+    $sth = $dbh->prepare("SELECT * FROM vhosts WHERE `hoster`='".$SQL{'whoami'}."'");
     $sth->execute();
-    while (($id,$sname,$droot,$sadmin,$sdomain,$soptions,$htaccess,$users,$extensions) = $sth->fetchrow_array()) {
+    while (($id,
+	    $hoster,
+	    $sname,
+	    $droot,
+	    $sadmin,
+	    $sdomain,
+	    $soptions,
+	    $htaccess,
+	    $users,
+	    $extensions,
+	    $redirect,
+	    $eredirect,
+	    $open_basedir,
+	    $safe_mode,
+	    $magic_quotes) = $sth->fetchrow_array()) {
 	$i++;
 	$droot =~ s/^\///;
+	$servername = $sname ? $sname.".".$sdomain : $sdomain;
 	if (-d "/home/customers/$sdomain/wwwroot/$droot") {
 	    if ($htaccess) {
 		open(HT,"> /home/customers/$sdomain/wwwroot/$droot/.htaccess") or die("Couldn't open: $!");
@@ -50,38 +69,62 @@ sub LoadVhosts($) {
 		close(HT);
 	    } else {
 		system("/bin/rm /home/customers/$sdomain/wwwroot/$droot/.htaccess") if (-e "/home/customers/$sdomain/wwwroot/$droot/.htaccess");
-	    }
+	  }
 	} else {
-	    next;
+	    if (!$redirect) {
+		warn "PheMail::Vhost: Warning: ".$servername."'s documentroot does not exist.\n";
+		next;
+	    } 
 	}
-	$servername = $sname ? $sname.".".$sdomain : $sdomain;
         @sextensions = split("\n",$extensions);
 	my $lamext; 
 	push @$lamext, [ "image/x-icon", ".ico" ]; # just to have something for default AddType so it won't fail.
-	use Data::Dumper;
 	foreach my $grasp (@sextensions) {
 	    chomp($grasp); # remove the latter \n
 	    my($dotext,$handler) = split(/:/,$grasp);
 	    $handler =~ s/\r//g if $handler; # obviously this created some errors in the arrayref push
 	    push @$lamext, [ $handler, $dotext ] if ($dotext && $handler); # push in the new extensions
 	}
-	push @{$VirtualHost->{'*'}}, {
-	    ServerName       => $servername,
-	    ServerAdmin      => $sadmin,
-	    DocumentRoot     => "/usr/home/customers/$sdomain/wwwroot/$droot",
-	    ErrorLog         => "/usr/home/customers/$sdomain/log/httpd-error.log",
-	    TransferLog      => "/usr/home/customers/$sdomain/log/httpd-access.log",
-	    AddType          => $lamext,
-	    php_admin_value  => [ [ "open_basedir", "/usr/home/customers/$sdomain/wwwroot/$droot" ], # basedir restriction
-				  [ "include_path", "/usr/home/customers/$sdomain/wwwroot/$droot" ], # include path
-				  [ "sendmail_from", $sadmin ] ],                                    # sendmail from
-	    Directory	 => {
-		"/usr/home/customers/$sdomain/wwwroot/$droot" => {
-		    Options => $soptions,
-		    AllowOverride => "All",
+	my $php_modes; my $php_flags;
+	push @$php_modes, [ "sendmail_from", $sadmin ]; # default values in the modes, just to have something
+	push @$php_modes, [ "include_path", "/usr/home/customers/$sdomain/wwwroot/$droot" ]; # include path
+	if ($open_basedir > 0) { push @$php_modes, [ "open_basedir", "/usr/home/customers/".$sdomain."/wwwroot/".$droot ]; }
+	if ($safe_mode  > 0) {
+	    push @$php_flags, [ "safe_mode", 1 ]; 
+	} else {
+	    push @$php_flags, [ "safe_mode", 0 ];
+	}
+	if ($magic_quotes > 0) {
+	    push @$php_flags, [ "magic_quotes_gpc", 1 ];
+	} else {
+	    push @$php_flags, [ "magic_quotes_gpc", 0 ];
+	}
+	if ($eredirect) {
+	    push @{$VirtualHost->{'*'}}, {
+		ServerName       => $servername,
+		ServerAdmin      => $sadmin,
+		ErrorLog         => "/usr/home/customers/$sdomain/log/httpd-error.log",
+		TransferLog      => "/usr/home/customers/$sdomain/log/httpd-access.log",
+		Redirect         => [ "/", $redirect ],
+	    };
+	} else {
+	    push @{$VirtualHost->{'*'}}, {
+		ServerName       => $servername,
+		ServerAdmin      => $sadmin,
+		DocumentRoot     => "/usr/home/customers/$sdomain/wwwroot/$droot",
+		ErrorLog         => "/usr/home/customers/$sdomain/log/httpd-error.log",
+		TransferLog      => "/usr/home/customers/$sdomain/log/httpd-access.log",
+		AddType          => $lamext,
+		php_admin_value  => $php_modes,
+		php_admin_flag  => $php_flags,
+		Directory	 => {
+		    "/usr/home/customers/$sdomain/wwwroot/$droot" => {
+			Options => $soptions,
+			AllowOverride => "All",
+		    },
 		},
-	    },
-	};
+	    };
+	}
     }
     printf("PheMail: Done loading %d vhosts.\n",$i);
     $sth->finish();
@@ -98,17 +141,40 @@ PheMail::Vhost - Perl extension for Apache MySQL Vhost loading
 =head1 SYNOPSIS
 
   use PheMail::Vhost;
-  PheMail::LoadVhosts();
+  PheMail::LoadVhosts(\%VirtualHost);
 
 =head1 DESCRIPTION
 
 PheMail::Vhost loads vhosts into httpd.conf (Apache 1.3.x) collected from
 a MySQL database. Used in Project PheMail.
-That's about all that's to it.
+It is possible to extend it's features to do a lot of other stuff.
+Here's a sample MySQL structure:
+
+CREATE TABLE `vhosts` (
+  `id` int(11) NOT NULL auto_increment,
+  `hoster` varchar(15) NOT NULL default '127.0.0.1',
+  `sname` varchar(255) NOT NULL default '',
+  `droot` varchar(255) NOT NULL default '',
+  `sadmin` varchar(255) NOT NULL default 'foo@bar.com',
+  `domain` varchar(255) NOT NULL default '',
+  `soptions` varchar(255) NOT NULL default '',
+  `htaccess` text NOT NULL,
+  `users` text NOT NULL,
+  `extensions` text NOT NULL,
+  `redirect` varchar(255) NOT NULL default '',
+  `eredirect` enum('1','0') NOT NULL default '0',
+  `open_basedir` enum('1','0') NOT NULL default '1',
+  `safe_mode` enum('1','0') NOT NULL default '0',
+  `magic_quotes` enum('1','0') NOT NULL default '1',
+  PRIMARY KEY  (`id`)
+) TYPE=MyISAM AUTO_INCREMENT=131 ;
+
+The fields should be pretty selfexplanatory.
+Since this is a part of a project, I don't really support the structure.
 
 =head2 EXPORT
 
-None by default.
+LoadVhosts();
 
 
 =head1 AUTHOR
@@ -118,5 +184,9 @@ Jesper Noehr, E<lt>jesper@noehr.orgE<gt>
 =head1 SEE ALSO
 
 L<perl>, L<DBI>
+
+=head1 TODO
+
+I really need to rewrite this code sometime.
 
 =cut
