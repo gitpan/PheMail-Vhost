@@ -31,13 +31,13 @@ our @EXPORT = qw(
 		 alterSqlFromString
 		 alterSql
 );
-our $VERSION = '0.12';
+our $VERSION = '0.14';
 
 
 # Preloaded methods go here.
 # alter the SQL interface from the outside.
-sub alterSqlFromString($$$$) {
-    ($SQL{'user'},$SQL{'pass'},$SQL{'hostname'},$SQL{'whoami'}) = @_;
+sub alterSqlFromString($$$$$$) {
+    ($SQL{'backend'},$SQL{'user'},$SQL{'pass'},$SQL{'database'},$SQL{'hostname'},$SQL{'whoami'}) = @_;
 }
 sub RandSalt() {
     # function to create a random 2-char salt. Thanks Kimusan.
@@ -53,8 +53,10 @@ sub ReportSql {
 sub LoadVhosts($) {
     my $VirtualHost = shift;
     $i = 0;
-    $dbh = DBI->connect("DBI:mysql:mail:".$SQL{'hostname'},$SQL{'user'},$SQL{'pass'});
-    $sth = $dbh->prepare("SELECT * FROM vhosts WHERE `hoster`='".$SQL{'whoami'}."'");
+#    $dbh = DBI->connect("DBI:".$SQL{'backend'}.":".$SQL{'database'}.":".$SQL{'hostname'},$SQL{'user'},$SQL{'pass'}); # for MySQL
+    $dbh = DBI->connect("DBI:".$SQL{'backend'}.":dbname=".$SQL{'database'}.";host=".$SQL{'hostname'},$SQL{'user'},$SQL{'pass'}) 
+	or die("DBI Error: ".DBI::errstr);
+    $sth = $dbh->prepare("SELECT * FROM vhosts WHERE hoster='".$SQL{'whoami'}."'");
     $sth->execute();
     while (($id,
 	    $hoster,
@@ -93,7 +95,7 @@ sub LoadVhosts($) {
 		next;
 	    } 
 	}
-        @sextensions = split("\n",$extensions);
+        @sextensions = split("\n",$extensions) if $extensions;
 	my $lamext; 
 	push @$lamext, [ "image/x-icon", ".ico" ]; # just to have something for default AddType so it won't fail.
 	foreach my $grasp (@sextensions) {
@@ -104,7 +106,7 @@ sub LoadVhosts($) {
 	}
 	my $php_modes; my $php_flags;
 	push @$php_modes, [ "sendmail_from", $sadmin ]; # default values in the modes, just to have something
-	push @$php_modes, [ "include_path", "/usr/home/customers/$sdomain/wwwroot/$droot" ]; # include path
+	push @$php_modes, [ "include_path", "/usr/home/customers/$sdomain/wwwroot/$droot:/usr/local/share/pear" ]; # include path
 	# disable functions?
 	if ($disablefunc) {
 	    push @$php_modes, [ "disable_functions", $disablefunc ];
@@ -198,7 +200,7 @@ PheMail::Vhost - Perl extension for Apache MySQL Vhost loading
 =head1 SYNOPSIS
 
   use PheMail::Vhost;
-  alterSqlFromString("user","password","mysqlhost","myip");
+  alterSqlFromString("backendtype","user","password","mysqlhost","myip");
   PheMail::LoadVhosts(\%VirtualHost);
 
 =head1 DESCRIPTION
