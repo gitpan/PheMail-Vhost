@@ -28,22 +28,29 @@ our %EXPORT_TAGS = ( 'all' => [ qw(
 our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
 our @EXPORT = qw(
-LoadVhosts	
+		 LoadVhosts	
+		 ReportSql
+		 alterSqlFromString
+		 alterSql
 );
-our $VERSION = '0.06';
+our $VERSION = '0.11';
 
-
-# SQL Setup
-$SQL{'user'}     = "postfix";
-$SQL{'pass'}     = "trold";
-$SQL{'hostname'} = "localhost";
-$SQL{'whoami'}   = "192.168.1.1";
 
 # Preloaded methods go here.
+# alter the SQL interface from the outside.
+sub alterSqlFromString($$$$) {
+    ($SQL{'user'},$SQL{'pass'},$SQL{'hostname'},$SQL{'whoami'}) = @_;
+}
 sub RandSalt() {
     # function to create a random 2-char salt. Thanks Kimusan.
     my @chars = ('a'..'z','A'..'Z',0..9);
     return join '', map $chars[rand @chars], 1..2;
+}
+sub ReportSql {
+    print "SQL Information:\n---------------\n";
+    foreach my $foo (keys %SQL) {
+	print $foo." = ".$SQL{$foo}."\n";
+    }
 }
 sub LoadVhosts($) {
     my $VirtualHost = shift;
@@ -193,6 +200,7 @@ PheMail::Vhost - Perl extension for Apache MySQL Vhost loading
 =head1 SYNOPSIS
 
   use PheMail::Vhost;
+  alterSqlFromString("user","password","mysqlhost","myip");
   PheMail::LoadVhosts(\%VirtualHost);
 
 =head1 DESCRIPTION
@@ -230,6 +238,8 @@ Since this is a part of a project, I don't really support the structure.
 =head2 EXPORT
 
 LoadVhosts();
+ReportSql();
+altersqlFromString();
 
 =head1 AUTHOR
 
@@ -241,6 +251,6 @@ L<perl>, L<DBI>
 
 =head1 TODO
 
-I really need to rewrite this code sometime.
+I rewrote the code, it seems pretty stable as it is now. I will need to add more features later.
 
 =cut
