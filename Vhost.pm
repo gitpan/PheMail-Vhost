@@ -3,8 +3,6 @@ package PheMail::Vhost;
 use 5.006;
 use strict;
 use warnings;
-use Apache::Registry;
-use Data::Dumper;
 use DBI;
 use vars qw($sth $dbh $sname $sadmin $droot $id $extensions @sextensions $redirect
 	    $soptions $i $htaccess $sdomain $servername $users %SQL $hoster $eredirect
@@ -33,7 +31,7 @@ our @EXPORT = qw(
 		 alterSqlFromString
 		 alterSql
 );
-our $VERSION = '0.11';
+our $VERSION = '0.12';
 
 
 # Preloaded methods go here.
