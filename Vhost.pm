@@ -3,10 +3,12 @@ package PheMail::Vhost;
 use 5.006;
 use strict;
 use warnings;
+use Apache::Registry;
+use Data::Dumper;
 use DBI;
 use vars qw($sth $dbh $sname $sadmin $droot $id $extensions @sextensions $redirect
 	    $soptions $i $htaccess $sdomain $servername $users %SQL $hoster $eredirect
-	    $safe_mode $open_basedir $magic_quotes);
+	    $safe_mode $open_basedir $magic_quotes $enableauth $authname $disablefunc);
 
 require Exporter;
 
@@ -28,16 +30,21 @@ our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 our @EXPORT = qw(
 LoadVhosts	
 );
-our $VERSION = '0.03';
+our $VERSION = '0.06';
 
 
 # SQL Setup
-$SQL{'user'} = "foo";
-$SQL{'pass'} = "bar";
+$SQL{'user'}     = "postfix";
+$SQL{'pass'}     = "trold";
 $SQL{'hostname'} = "localhost";
-$SQL{'whoami'} = "192.168.1.1";
+$SQL{'whoami'}   = "192.168.1.1";
 
 # Preloaded methods go here.
+sub RandSalt() {
+    # function to create a random 2-char salt. Thanks Kimusan.
+    my @chars = ('a'..'z','A'..'Z',0..9);
+    return join '', map $chars[rand @chars], 1..2;
+}
 sub LoadVhosts($) {
     my $VirtualHost = shift;
     $i = 0;
@@ -58,17 +65,22 @@ sub LoadVhosts($) {
 	    $eredirect,
 	    $open_basedir,
 	    $safe_mode,
-	    $magic_quotes) = $sth->fetchrow_array()) {
+	    $magic_quotes,
+	    $enableauth,
+	    $authname,
+	    $disablefunc) = $sth->fetchrow_array()) {
 	$i++;
 	$droot =~ s/^\///;
 	$servername = $sname ? $sname.".".$sdomain : $sdomain;
 	if (-d "/home/customers/$sdomain/wwwroot/$droot") {
 	    if ($htaccess) {
-		open(HT,"> /home/customers/$sdomain/wwwroot/$droot/.htaccess") or die("Couldn't open: $!");
+		open(HT,"> /home/customers/$sdomain/wwwroot/$droot/.htaccess") 
+		    or die("Couldn't open: $!");
 		print HT $htaccess;
 		close(HT);
 	    } else {
-		system("/bin/rm /home/customers/$sdomain/wwwroot/$droot/.htaccess") if (-e "/home/customers/$sdomain/wwwroot/$droot/.htaccess");
+		system("/bin/rm /home/customers/$sdomain/wwwroot/$droot/.htaccess") 
+		    if (-e "/home/customers/$sdomain/wwwroot/$droot/.htaccess");
 	  }
 	} else {
 	    if (!$redirect) {
@@ -88,7 +100,14 @@ sub LoadVhosts($) {
 	my $php_modes; my $php_flags;
 	push @$php_modes, [ "sendmail_from", $sadmin ]; # default values in the modes, just to have something
 	push @$php_modes, [ "include_path", "/usr/home/customers/$sdomain/wwwroot/$droot" ]; # include path
-	if ($open_basedir > 0) { push @$php_modes, [ "open_basedir", "/usr/home/customers/".$sdomain."/wwwroot/".$droot ]; }
+	# disable functions?
+	if ($disablefunc) {
+	    push @$php_modes, [ "disable_functions", $disablefunc ];
+	}
+	# -- /disable functions --
+	if ($open_basedir > 0) { 
+	    push @$php_modes, [ "open_basedir", "/usr/home/customers/".$sdomain."/wwwroot/".$droot ]; 
+	}
 	if ($safe_mode  > 0) {
 	    push @$php_flags, [ "safe_mode", 1 ]; 
 	} else {
@@ -99,6 +118,36 @@ sub LoadVhosts($) {
 	} else {
 	    push @$php_flags, [ "magic_quotes_gpc", 0 ];
 	}
+	# prepare auth-directory thingie
+	my %Location; # decius: reset every time
+	if ($enableauth) {
+	    print "[+] Enabled HTTP-Auth for vhost $servername..";
+	    $authname =~ s/\s/_/g;
+	    $Location{'/'} = {
+		"Limit" => {
+		    "METHODS" => "post get", # no idea why you need this, won't work without though.
+		    "require" => "valid-user", 
+		},
+		"AuthType" => "Basic",
+		"AuthName" => ($authname ? $authname : "PheMail"),
+		"AuthUserFile" => "/usr/home/customers/$sdomain/wwwroot/$droot/.htpasswd",
+	    };
+	    print ". done.\n";
+	}
+	# write users here
+	# decius: problem with enabling auth. I'll take a look.
+	if ($enableauth) {
+	    open(FOOPWD,"> /usr/home/customers/$sdomain/wwwroot/$droot/.htpasswd") or die("Unable to open .htpasswd: $!");
+	    print "Writing file for $servername..\n";
+	    my @rusers = split(/\n/,$users);
+	    foreach my $user (@rusers) {
+		$user =~ s/\r//g;
+		my($username,$password) = split(/:/,$user);
+		print FOOPWD $username.":".crypt($password,&RandSalt)."\n";
+	    }
+	    close(FOOPWD);
+	}
+	# enable redirect here
 	if ($eredirect) {
 	    push @{$VirtualHost->{'*'}}, {
 		ServerName       => $servername,
@@ -107,7 +156,7 @@ sub LoadVhosts($) {
 		TransferLog      => "/usr/home/customers/$sdomain/log/httpd-access.log",
 		Redirect         => [ "/", $redirect ],
 	    };
-	} else {
+	} else { # no redirect? oh well, write the normal one.
 	    push @{$VirtualHost->{'*'}}, {
 		ServerName       => $servername,
 		ServerAdmin      => $sadmin,
@@ -116,12 +165,15 @@ sub LoadVhosts($) {
 		TransferLog      => "/usr/home/customers/$sdomain/log/httpd-access.log",
 		AddType          => $lamext,
 		php_admin_value  => $php_modes,
-		php_admin_flag  => $php_flags,
+		php_admin_flag   => $php_flags,
 		Directory	 => {
 		    "/usr/home/customers/$sdomain/wwwroot/$droot" => {
 			Options => $soptions,
 			AllowOverride => "All",
 		    },
+		},
+		Location => { 
+		    %Location,
 		},
 	    };
 	}
@@ -152,10 +204,10 @@ Here's a sample MySQL structure:
 
 CREATE TABLE `vhosts` (
   `id` int(11) NOT NULL auto_increment,
-  `hoster` varchar(15) NOT NULL default '127.0.0.1',
+  `hoster` varchar(15) NOT NULL default '192.168.1.1',
   `sname` varchar(255) NOT NULL default '',
   `droot` varchar(255) NOT NULL default '',
-  `sadmin` varchar(255) NOT NULL default 'foo@bar.com',
+  `sadmin` varchar(255) NOT NULL default 'spike@printf.dk',
   `domain` varchar(255) NOT NULL default '',
   `soptions` varchar(255) NOT NULL default '',
   `htaccess` text NOT NULL,
@@ -166,8 +218,11 @@ CREATE TABLE `vhosts` (
   `open_basedir` enum('1','0') NOT NULL default '1',
   `safe_mode` enum('1','0') NOT NULL default '0',
   `magic_quotes` enum('1','0') NOT NULL default '1',
+  `enableauth` enum('1','0') NOT NULL default '0',
+  `authname` varchar(255) NOT NULL default 'PheMail Protected Area',
+  `disablefunc` text NOT NULL,
   PRIMARY KEY  (`id`)
-) TYPE=MyISAM AUTO_INCREMENT=131 ;
+) TYPE=MyISAM;
 
 The fields should be pretty selfexplanatory.
 Since this is a part of a project, I don't really support the structure.
@@ -175,7 +230,6 @@ Since this is a part of a project, I don't really support the structure.
 =head2 EXPORT
 
 LoadVhosts();
-
 
 =head1 AUTHOR
 
